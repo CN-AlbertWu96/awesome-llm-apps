@@ -230,7 +230,7 @@ def get_query_rewriter_agent() -> Agent:
     """Initialize a query rewriting agent."""
     return Agent(
         name="Query Rewriter",
-        model=Gemini(id="gemini-exp-1206"),
+        model=Gemini(id="gemini-3-flash-preview"),  # 使用稳定的基础模型
         instructions="""You are an expert at reformulating questions to be more precise and detailed. 
         Your task is to:
         1. Analyze the user's question
@@ -246,7 +246,6 @@ def get_query_rewriter_agent() -> Agent:
         User: "Tell me about transformers"
         Output: "Explain the architecture, mechanisms, and applications of Transformer neural networks in natural language processing and deep learning"
         """,
-        show_tool_calls=False,
         markdown=True,
     )
 
@@ -255,7 +254,7 @@ def get_web_search_agent() -> Agent:
     """Initialize a web search agent."""
     return Agent(
         name="Web Search Agent",
-        model=Gemini(id="gemini-exp-1206"),
+        model=Gemini(id="gemini-3-flash-preview"),  # 使用稳定的基础模型
         tools=[ExaTools(
             api_key=st.session_state.exa_api_key,
             include_domains=search_domains,
@@ -266,7 +265,6 @@ def get_web_search_agent() -> Agent:
         2. Compile and summarize the most relevant information
         3. Include sources in your response
         """,
-        show_tool_calls=True,
         markdown=True,
     )
 
@@ -275,7 +273,7 @@ def get_rag_agent() -> Agent:
     """Initialize the main RAG agent."""
     return Agent(
         name="Gemini RAG Agent",
-        model=Gemini(id="gemini-2.0-flash-thinking-exp-01-21"),
+        model=Gemini(id="gemini-3-flash-preview"),  # 使用稳定的基础模型
         instructions="""You are an Intelligent Agent specializing in providing accurate answers.
         
         When given context from documents:
@@ -288,7 +286,6 @@ def get_rag_agent() -> Agent:
         
         Always maintain high accuracy and clarity in your responses.
         """,
-        show_tool_calls=True,
         markdown=True,
     )
 
@@ -389,8 +386,13 @@ if st.session_state.google_api_key:
                     st.write(f"Original: {prompt}")
                     st.write(f"Rewritten: {rewritten_query}")
             except Exception as e:
-                st.error(f"❌ Error rewriting query: {str(e)}")
-                rewritten_query = prompt
+                error_msg = str(e)
+                if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                    st.warning("⚠️ API quota exceeded. Using original query without rewriting.")
+                    rewritten_query = prompt
+                else:
+                    st.error(f"❌ Error rewriting query: {error_msg}")
+                    rewritten_query = prompt
 
         # Step 2: Choose search strategy based on force_web_search toggle
         context = ""
@@ -426,7 +428,11 @@ if st.session_state.google_api_key:
                         else:
                             st.info("ℹ️ Using web search as fallback since no relevant documents were found.")
                 except Exception as e:
-                    st.error(f"❌ Web search error: {str(e)}")
+                    error_msg = str(e)
+                    if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                        st.warning("⚠️ Web search quota exceeded. Proceeding without web search.")
+                    else:
+                        st.error(f"❌ Web search error: {error_msg}")
 
         # Step 4: Generate response using the RAG agent
         with st.spinner("🤖 Thinking..."):
@@ -467,7 +473,35 @@ Please provide a comprehensive answer based on the available information."""
                                 st.write(f"{doc.page_content[:200]}...")
 
             except Exception as e:
-                st.error(f"❌ Error generating response: {str(e)}")
+                error_msg = str(e)
+                if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                    st.error("🚫 **API Quota Exceeded**")
+                    st.warning("""
+                    **解决方案**:
+                    1. 等待配额重置 (通常24小时)
+                    2. 升级到付费计划
+                    3. 使用不同的 API 密钥
+                    4. 减少使用频率
+                    """)
+                else:
+                    st.error(f"❌ Error generating response: {error_msg}")
 
 else:
     st.warning("⚠️ Please enter your Google API Key to continue")
+    
+    # 添加配额使用提示
+    st.info("""
+    **💡 Gemini API 使用提示**:
+    
+    **免费配额限制**:
+    - 每日请求数: 1,500 次
+    - 每分钟请求数: 15 次
+    - 每日 Token 数: 1,000,000 个
+    
+    **优化建议**:
+    - 使用 `gemini-1.5-flash` 而非实验性模型
+    - 避免频繁刷新页面
+    - 考虑升级到付费计划获得更高配额
+    
+    **监控使用情况**: [Google AI Studio Usage](https://ai.dev/usage?tab=rate-limit)
+    """)
