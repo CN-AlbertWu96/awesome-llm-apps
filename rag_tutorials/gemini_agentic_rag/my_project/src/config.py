@@ -5,3 +5,5 @@ EMBEDDING_MODEL_ID = "models/text-embedding-004"
 VECTOR_SIZE = 768
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
+QDRANT_PATH = "./qdrant_data"
+

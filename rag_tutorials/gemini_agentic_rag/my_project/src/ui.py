@@ -6,8 +6,10 @@ def init_session_state():
         'google_api_key': "",
         'qdrant_api_key': "",
         'qdrant_url': "",
+        'qdrant_storage_mode': "Local",  # Default to Local for easier setup
         'vector_store': None,
         'processed_documents': [],
+        'documents_loaded': False,  # Track if we've loaded documents from DB
         'history': [],
         'exa_api_key': "",
         'use_web_search': False,
@@ -28,19 +30,51 @@ def render_sidebar():
         type="password", 
         value=st.session_state.google_api_key
     )
-    st.session_state.qdrant_api_key = st.sidebar.text_input(
-        "Qdrant API Key", 
-        type="password", 
-        value=st.session_state.qdrant_api_key
+
+    st.sidebar.subheader("Vector Database")
+    
+    # Check if storage mode changed and reset client if needed
+    current_mode = st.sidebar.radio(
+        "Storage Mode",
+        ["Local", "Cloud"],
+        index=0 if st.session_state.get('qdrant_storage_mode', 'Local') == 'Local' else 1,
+        help="Local: Store data in local folder. Cloud: Connect to Qdrant Cloud."
     )
-    st.session_state.qdrant_url = st.sidebar.text_input(
-        "Qdrant URL",
-        placeholder="https://your-cluster.cloud.qdrant.io:6333",
-        value=st.session_state.qdrant_url
-    )
+    
+    if 'qdrant_storage_mode' in st.session_state and current_mode != st.session_state.qdrant_storage_mode:
+        # Storage mode changed, clear cache
+        st.cache_resource.clear()
+        st.session_state.vector_store = None
+        st.session_state.processed_documents = []
+        st.session_state.documents_loaded = False
+    
+    st.session_state.qdrant_storage_mode = current_mode
+
+    if st.session_state.qdrant_storage_mode == "Cloud":
+        st.session_state.qdrant_api_key = st.sidebar.text_input(
+            "Qdrant API Key", 
+            type="password", 
+            value=st.session_state.qdrant_api_key
+        )
+        st.session_state.qdrant_url = st.sidebar.text_input(
+            "Qdrant URL",
+            placeholder="https://your-cluster.cloud.qdrant.io:6333",
+            value=st.session_state.qdrant_url
+        )
+    else:
+        st.sidebar.info(f"📂 Data will be stored in ./qdrant_data")
 
     if st.sidebar.button("🗑️ Clear Chat History"):
+
         st.session_state.history = []
+        st.rerun()
+    
+    if st.sidebar.button("🔄 Reset Database Connection"):
+        st.cache_resource.clear()
+        st.session_state.vector_store = None
+        st.session_state.processed_documents = []
+        st.session_state.documents_loaded = False
+        st.success("✅ Database connection reset!")
         st.rerun()
 
     st.sidebar.header("🌐 Web Search Configuration")

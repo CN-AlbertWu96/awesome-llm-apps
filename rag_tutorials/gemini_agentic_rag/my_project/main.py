@@ -13,7 +13,8 @@ from src.services import (
     init_qdrant, 
     process_pdf, 
     process_web, 
-    create_vector_store
+    create_vector_store,
+    get_indexed_documents
 )
 from src.agents import (
     get_query_rewriter_agent, 
@@ -30,15 +31,58 @@ def main():
     # Render Sidebar
     search_domains = render_sidebar()
     
+    # Debug: Show current storage mode
+    st.sidebar.info(f"🔍 Current mode: {st.session_state.get('qdrant_storage_mode', 'Not set')}")
+    
+    # Init Qdrant client (can work without API key in Local mode)
+    qdrant_client = init_qdrant()
+    
+    # Debug: Show client status
+    if qdrant_client:
+        st.sidebar.success("✅ Qdrant client connected")
+        
+        # Load existing documents from vector DB on first run (without needing API key)
+        if not st.session_state.documents_loaded:
+            with st.spinner('📚 Loading existing documents from database...'):
+                existing_docs = get_indexed_documents(qdrant_client)
+                if existing_docs:
+                    st.session_state.processed_documents = existing_docs
+                    st.sidebar.info(f"✅ Loaded {len(existing_docs)} existing document(s)")
+            st.session_state.documents_loaded = True
+    else:
+        st.sidebar.error("❌ Qdrant client not connected")
+    
+    # Display Processed Sources (always show if we have documents)
+    if st.session_state.processed_documents:
+        st.sidebar.header("📚 Processed Sources")
+        for source in st.session_state.processed_documents:
+            icon = "📄" if source.endswith('.pdf') else "🌐"
+            st.sidebar.text(f"{icon} {source}")
+
+
+    
     # API Configuration Check
     if st.session_state.google_api_key:
         os.environ["GOOGLE_API_KEY"] = st.session_state.google_api_key
         genai.configure(api_key=st.session_state.google_api_key)
         
-        # Init Qdrant client
-        qdrant_client = init_qdrant()
+        # Initialize vector store if not already done
+        if qdrant_client and st.session_state.vector_store is None and st.session_state.processed_documents:
+            try:
+                from src.config import COLLECTION_NAME
+                from src.models import GeminiEmbedder
+                from langchain_qdrant import QdrantVectorStore
+                st.session_state.vector_store = QdrantVectorStore(
+                    client=qdrant_client,
+                    collection_name=COLLECTION_NAME,
+                    embedding=GeminiEmbedder()
+                )
+            except Exception as e:
+                st.warning(f"⚠️ Could not initialize vector store: {e}")
         
         # Data Upload Section in Sidebar
+
+
         st.sidebar.header("📁 Data Upload")
         uploaded_file = st.sidebar.file_uploader("Upload PDF", type=["pdf"])
         web_url = st.sidebar.text_input("Or enter URL")
@@ -65,13 +109,6 @@ def main():
                         st.session_state.vector_store = create_vector_store(qdrant_client, texts)
                     st.session_state.processed_documents.append(web_url)
                     st.success(f"✅ Added URL: {web_url}")
-
-        # Display Processed Sources
-        if st.session_state.processed_documents:
-            st.sidebar.header("📚 Processed Sources")
-            for source in st.session_state.processed_documents:
-                icon = "📄" if source.endswith('.pdf') else "🌐"
-                st.sidebar.text(f"{icon} {source}")
 
         # Chat Area
         prompt = render_chat_interface()

@@ -10,22 +10,119 @@ from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
-from .config import COLLECTION_NAME, VECTOR_SIZE, CHUNK_SIZE, CHUNK_OVERLAP
+from .config import COLLECTION_NAME, VECTOR_SIZE, CHUNK_SIZE, CHUNK_OVERLAP, QDRANT_PATH
 from .models import GeminiEmbedder
+
+@st.cache_resource
+def get_local_qdrant_client() -> Optional[QdrantClient]:
+    """Get or create a cached local Qdrant client."""
+    try:
+        return QdrantClient(path=QDRANT_PATH)
+    except Exception as e:
+        st.error(f"🔴 Local Qdrant connection failed: {str(e)}")
+        return None
+
+@st.cache_resource
+def get_cloud_qdrant_client(_api_key: str, _url: str) -> Optional[QdrantClient]:
+    """Get or create a cached cloud Qdrant client."""
+    try:
+        if not _api_key or not _url:
+            return None
+        return QdrantClient(url=_url, api_key=_api_key, timeout=60)
+    except Exception as e:
+        st.error(f"🔴 Cloud Qdrant connection failed: {str(e)}")
+        return None
 
 def init_qdrant() -> Optional[QdrantClient]:
     """Initialize Qdrant client with configured settings."""
-    if not all([st.session_state.get('qdrant_api_key'), st.session_state.get('qdrant_url')]):
-        return None
+    storage_mode = st.session_state.get('qdrant_storage_mode', 'Cloud')
+    
+    if storage_mode == 'Local':
+        return get_local_qdrant_client()
+    else:
+        api_key = st.session_state.get('qdrant_api_key', '')
+        url = st.session_state.get('qdrant_url', '')
+        if not api_key or not url:
+            return None
+        return get_cloud_qdrant_client(api_key, url)
+
+def get_indexed_documents(client: QdrantClient) -> List[str]:
+    """Retrieve list of already indexed documents from Qdrant."""
     try:
-        return QdrantClient(
-            url=st.session_state.qdrant_url,
-            api_key=st.session_state.qdrant_api_key,
-            timeout=60
-        )
+        # Check if collection exists
+        if not client.collection_exists(COLLECTION_NAME):
+            st.info(f"📋 Collection '{COLLECTION_NAME}' does not exist yet")
+            return []
+        
+        # Get collection info
+        collection_info = client.get_collection(COLLECTION_NAME)
+        st.info(f"📊 Collection has {collection_info.points_count} points")
+        
+        if collection_info.points_count == 0:
+            return []
+        
+        # Scroll through all points to get unique source names
+        sources = set()
+        offset = None
+        all_keys = set()  # 用于调试
+        
+        while True:
+            points, next_offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=None,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            if not points:
+                break
+                
+            for point in points:
+                if point.payload:
+                    # 收集所有键用于调试
+                    all_keys.update(point.payload.keys())
+                    
+                    # 尝试多种可能的字段名
+                    source_name = None
+                    
+                    # 方法1: 直接字段
+                    if 'file_name' in point.payload:
+                        source_name = point.payload['file_name']
+                    elif 'url' in point.payload:
+                        source_name = point.payload['url']
+                    elif 'source' in point.payload:
+                        source_name = point.payload['source']
+                    # 方法2: 嵌套在 metadata 中
+                    elif 'metadata' in point.payload:
+                        metadata = point.payload['metadata']
+                        if isinstance(metadata, dict):
+                            source_name = (metadata.get('file_name') or 
+                                         metadata.get('url') or 
+                                         metadata.get('source'))
+                    
+                    if source_name:
+                        sources.add(source_name)
+            
+            # Check if there are more points
+            if next_offset is None:
+                break
+            offset = next_offset
+        
+        # 调试信息
+        if sources:
+            st.success(f"✅ Found {len(sources)} unique document(s)")
+        else:
+            st.warning(f"⚠️ No document sources found. Payload keys: {sorted(all_keys)}")
+        
+        return sorted(list(sources))  # Sort for consistent display
     except Exception as e:
-        st.error(f"🔴 Qdrant connection failed: {str(e)}")
-        return None
+        st.error(f"❌ Could not retrieve indexed documents: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        return []
+
 
 def process_pdf(file) -> List:
     """Process PDF file and add source metadata."""
